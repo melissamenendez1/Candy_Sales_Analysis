@@ -1,0 +1,210 @@
+---
+title: "Candy Sales: Seasonal Patterns by Division"
+format: html
+---
+
+# Introduction
+
+This report examines whether candy sales follow a seasonal pattern, and whether that pattern holds across the three product divisions: Chocolate, Other, and Sugar. It uses `Candy_Sales_clean.csv`, a cleaned version of the raw sales data in which two issues were corrected:
+
+1. **Ship Date corruption**: the original `Ship Date` column had a fixed 2000-day offset added to every value, which was identified and subtracted out.
+2. **Division miscoding**: the product "Fizzy Lifting Drinks" (Product ID `OTH-FIZ-56000`) was originally labeled Division `Sugar`, but its ID prefix matches the `Other` division's naming convention, so it was reassigned to `Other`.
+
+Both corrections are already reflected in `Candy_Sales_clean.csv`, which this report loads directly.
+
+The division correction also affects the 2024 Actual-vs-Target variance analysis. Reassigning Fizzy Lifting Drinks' $26.25 in 2024 sales out of Sugar and into Other widened Sugar's dollar variance from -$14,856.35 to -$14,882.60.
+
+# Load packages and data
+
+```{python}
+#| label: load-packages
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+```
+
+```{python}
+#| label: load-data
+CURRENCY_FMT = "${:,.2f}"
+DATE_FMT = "%Y-%m-%d"
+ORDER_DATE_COL = "Order Date"
+SHIP_DATE_COL = "Ship Date"
+SALES_COL = "Sales"
+DIVISION_COL = "Division"
+YEAR_COL = "Year"
+MONTH_COL = "Month"
+PRODUCT_NAME_COL = "Product Name"
+UNITS_COL = "Units"
+GROSS_PROFIT_COL = "Gross Profit"
+COST_COL = "Cost"
+
+candy = pd.read_csv(
+    "Candy_Sales_clean.csv",
+    parse_dates=[ORDER_DATE_COL, SHIP_DATE_COL]
+)
+
+candy[YEAR_COL] = candy[ORDER_DATE_COL].dt.year
+candy[MONTH_COL] = candy[ORDER_DATE_COL].dt.month
+
+(
+    candy.head()
+    .style
+    .format({
+        ORDER_DATE_COL: lambda d: d.strftime(DATE_FMT),
+        SHIP_DATE_COL: lambda d: d.strftime(DATE_FMT),
+        SALES_COL: CURRENCY_FMT,
+        GROSS_PROFIT_COL: CURRENCY_FMT,
+        COST_COL: CURRENCY_FMT,
+    })
+    .hide(axis="index")
+)
+```
+
+The dataset contains `{python} f"{len(candy):,}"` transactions spanning `{python} int(candy[ORDER_DATE_COL].dt.year.min())`–`{python} int(candy[ORDER_DATE_COL].dt.year.max())`, across three divisions: Chocolate, Other, and Sugar.
+
+# Overall monthly sales trend
+
+```{python}
+#| label: monthly-sales-overall
+monthly_sales = (
+    candy.groupby([YEAR_COL, MONTH_COL])[SALES_COL]
+    .sum()
+    .reset_index()
+)
+
+fig, ax = plt.subplots()
+for year, group in monthly_sales.groupby(YEAR_COL):
+    ax.plot(group[MONTH_COL], group[SALES_COL], marker="o", label=str(year))
+
+ax.set_xlabel(MONTH_COL)
+ax.set_ylabel(SALES_COL)
+ax.set_xticks(range(1, 13))
+ax.legend(title=YEAR_COL)
+plt.show()
+```
+
+Total monthly sales show a recurring seasonal shape: a dip around February, a rise through spring and summer, a sharp jump in September, a partial pullback in October, and a further rise to the year's highest points in November–December. Overall sales levels also trend upward from 2021 to 2024.
+
+# Seasonal patterns by division
+
+```{python}
+#| label: monthly-sales-by-division
+monthly_sales_division = (
+    candy.groupby([DIVISION_COL, YEAR_COL, MONTH_COL])[SALES_COL]
+    .sum()
+    .reset_index()
+)
+
+fig, axes = plt.subplots(1, 3, figsize=(12, 4), sharex=True)
+divisions = ["Chocolate", "Other", "Sugar"]
+
+for ax, division in zip(axes, divisions):
+    subset = monthly_sales_division[monthly_sales_division[DIVISION_COL] == division]
+    for year, group in subset.groupby(YEAR_COL):
+        ax.plot(group[MONTH_COL], group[SALES_COL], marker="o", label=str(year))
+    ax.set_title(division)
+    ax.set_xlabel(MONTH_COL)
+    ax.set_xticks(range(1, 13))
+
+axes[0].set_ylabel(SALES_COL)
+axes[-1].legend(title=YEAR_COL, bbox_to_anchor=(1.05, 1), loc="upper left")
+plt.tight_layout()
+plt.show()
+```
+
+Chocolate closely mirrors the overall pattern, which is expected given it makes up the large majority of transactions (9,844 of them, versus 316 for Other and 34 for Sugar). Other and Sugar are noisier, reflecting these much smaller transaction counts — note that the `n_months` column in the table below counts the number of year-month periods averaged over (32 for Jan-Aug, 16 for Sep-Dec across all four years), not the number of underlying transactions, which is why it looks the same across divisions.
+
+## Pre-holiday/holiday lift (September–December vs. January–August)
+
+```{python}
+#| label: seasonal-lift-table
+monthly_sales_division["season"] = np.where(
+    monthly_sales_division[MONTH_COL].between(9, 12),
+    "Sep-Dec",
+    "Jan-Aug"
+)
+
+seasonal_lift = (
+    monthly_sales_division
+    .groupby([DIVISION_COL, "season"])[SALES_COL]
+    .agg(mean_sales="mean", n_months="count")
+    .reset_index()
+)
+
+seasonal_lift.style.format({"mean_sales": CURRENCY_FMT}).hide(axis="index")
+```
+
+Chocolate and Other both show a visibly higher average in the Sep-Dec window than in Jan-Aug, consistent with a combined Halloween-and-holiday-season selling pattern. Sugar's chart shows a visible difference between the two periods as well, but given how few Sugar transactions there are overall, this apparent difference should be treated with caution rather than as a reliable pattern.
+
+# Recommendation: Nerds/Sugar holiday marketing pilot
+
+*Status: strategic hypothesis to pilot and test, not a data-validated finding.*
+
+The dashboard view below shows Nerds' share of Sugar division sales: $6, or 5.11% of total Sugar sales — the smallest share of any Sugar product in 2024. The rest of the Sugar product line is unevenly split — Hair Toffee leads at ~27% of Sugar sales, followed by Everlasting Gobstopper and SweeTARTS (tied at ~26% each), and Laffy Taffy (~17%).
+
+![Power BI dashboard: Product sales by division, showing Nerds' share of Sugar division sales.](dashboard_nerds_share.png)
+
+Sugar division sales are spread across a wide range of states and cities, with New York and Texas as the dominating states, and New York City and Pasadena as the dominating cities.
+
+![Power BI dashboard: Sugar division sales by state/province.](dashboard_sugar_by_state.png)
+
+![Power BI dashboard: Sugar division sales by city.](dashboard_sugar_by_city.png)
+
+Sales data for Nerds specifically is extremely limited: only 4 transactions total over 2021-2024.
+
+```{python}
+#| label: nerds-transactions
+(
+    candy.loc[candy[PRODUCT_NAME_COL] == "Nerds", [ORDER_DATE_COL, SALES_COL, UNITS_COL]]
+    .style
+    .format({
+        ORDER_DATE_COL: lambda d: d.strftime(DATE_FMT),
+        SALES_COL: CURRENCY_FMT,
+    })
+    .hide(axis="index")
+)
+```
+
+Three of these four transactions fall in the November-December window, which is a slightly more suggestive split than a quick glance at the 2024 data alone would suggest — but with only 4 data points total, this is far too small a sample to distinguish a real seasonal pattern from chance clustering. This differs from Chocolate and Other, where a visible Sep-Dec sales lift shows up clearly across thousands of transactions in the charts above.
+
+**The hypothesis:** candy purchasing broadly increases around Halloween and Christmas, as seen for Chocolate and Other, and Nerds/Sugar products may be under-marketed relative to this seasonal demand rather than genuinely unpopular during these months — the available data simply doesn't have enough volume to distinguish between "no seasonal demand" and "insufficient marketing to capture existing seasonal demand."
+
+**Recommended approach:** treat this as a testable pilot rather than a scaled commitment.
+
+The primary threshold below is set high enough to clear Sugar's typical month-to-month variability, so a real lift can be distinguished from ordinary noise.
+
+```{python}
+#| label: sugar-mad-threshold
+sugar_sepdec = monthly_sales_division.loc[
+    (monthly_sales_division[DIVISION_COL] == "Sugar") & (monthly_sales_division[MONTH_COL].between(9, 12)),
+    SALES_COL
+]
+
+sugar_mean = sugar_sepdec.mean()
+sugar_mad = (sugar_sepdec - sugar_mean).abs().mean()
+sugar_threshold = sugar_mean + sugar_mad
+
+pd.DataFrame({
+    "baseline average": [sugar_mean],
+    "typical monthly variation": [sugar_mad],
+    "success threshold": [sugar_threshold],
+}).style.format(CURRENCY_FMT).hide(axis="index")
+```
+
+Because Sugar sales are geographically diverse rather than concentrated in one place, the pilot is designed around two distinct goals:
+
+- **Goal 1 — Sugar division, top revenue-generating locations:** promote the full Sugar line in the two highest-revenue states (New York and Texas) and the two highest-revenue cities (New York City and Pasadena), to test whether a holiday push amplifies sales where Sugar candy already sells best.
+- **Goal 2 — Nerds specifically, existing customer base:** promote Nerds in New York City and Philadelphia, the only two cities with recorded Nerds purchases to date, to test whether the product's very limited existing footprint responds to targeted promotion.
+- Run both tracks during the same upcoming holiday window (September through December).
+- Track sales lift against the same Sep-Dec months in a prior year, for each goal separately.
+- **Primary success metric:** Sugar division sales sustained at or above roughly `{python} CURRENCY_FMT.format(sugar_threshold)`/month across the pilot window (baseline Sep-Dec average of `{python} CURRENCY_FMT.format(sugar_mean)`/month, plus typical monthly variation of `{python} CURRENCY_FMT.format(sugar_mad)`, to ensure any lift clears normal month-to-month noise rather than just a percentage target, which is unstable off such a small base).
+- **Secondary success metric:** at least 5 Sugar transactions/month sustained across the pilot window (roughly double the historical Sep-Dec average of ~2-3/month).
+- Both thresholds should be met to call the pilot a success; results that fall between baseline and threshold should be treated as inconclusive, not as a failure — the historical sample is too small to rule the hypothesis out from a single ambiguous result.
+
+Given Sugar's minimal share of total revenue (~0.3%), the downside of testing this is low, but expectations should be set accordingly: this is an exploratory bet on an underserved product line, not an extension of a pattern already proven for Sugar itself.
+
+# Takeaways and limitations
+
+- **Chocolate and Other** show a visible sales lift in the pre-holiday/holiday months (September through December), consistent with Halloween and Christmas buying patterns.
+- **Sugar** shows little visible seasonal lift in the line charts above; its transaction volume is very small (34 total over four years, ~0.3% of total revenue).
+
